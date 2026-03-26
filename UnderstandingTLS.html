@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Understanding TLS mTLS</title>
+    <style>
+        :root {
+            --primary: #2563eb; --server: #7c3aed; --client: #0891b2;
+            --ca: #f59e0b; --success: #10b981; --danger: #ef4444; --bg: #0f172a;
+        }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: #f8fafc; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; min-height: 100vh;}
+        .container { width: 100%; max-width: 1000px; }
+        
+        .control-panel { background: rgba(30, 41, 59, 0.6); border-radius: 12px; padding: 15px; margin-bottom: 20px; border: 1px solid #334155;}
+        .control-group { display: flex; justify-content: center; gap: 15px; margin-bottom: 10px; align-items: center; }
+        .label { font-weight: bold; color: #94a3b8; text-transform: uppercase; font-size: 0.8rem; min-width: 100px; }
+        .btn { padding: 8px 16px; border: 2px solid #334155; background: transparent; color: white; border-radius: 6px; cursor: pointer; transition: 0.3s; font-size: 0.9rem; }
+        .btn.active { border-color: var(--primary); background: rgba(37, 99, 235, 0.2); color: var(--primary); }
+        
+        .nav-btn { padding: 12px 25px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 1.1rem; transition: 0.2s; min-width: 140px; box-shadow: 0 4px 15px rgba(0,0,0,0.4); }
+        .btn-prev { background: #4b5563; color: white; }
+        .btn-next { background: var(--success); color: white; }
+        .btn-start { background: var(--primary); color: white; padding: 12px 60px; }
+        .nav-btn:disabled { opacity: 0.2; cursor: not-allowed; }
+
+        .stage { height: 650px; position: relative; border: 1px solid #334155; border-radius: 20px; background: #111827; margin-bottom: 20px; overflow: hidden; }
+        
+        .node { position: absolute; text-align: center; width: 180px; z-index: 20; }
+        .node .icon { width: 70px; height: 70px; border-radius: 12px; margin: 0 auto 10px; display: flex; align-items: center; justify-content: center; font-size: 32px; color: white; border: 3px solid transparent; transition: 0.4s; background: #1f2937; }
+        #node-ca { top: 30px; left: 50%; transform: translateX(-50%); }
+        #node-ca .icon { background: var(--ca); border-radius: 50%; box-shadow: 0 0 20px rgba(245, 158, 11, 0.4); }
+        #node-client { top: 200px; left: 50px; }
+        #node-client .icon { border-color: var(--client); }
+        #node-server { top: 200px; right: 50px; }
+        #node-server .icon { border-color: var(--server); }
+
+        .inventory { background: rgba(0,0,0,0.5); padding: 10px; border-radius: 8px; font-size: 0.75rem; text-align: left; margin-top: 8px; border: 1px solid #374151; min-width: 175px; font-family: monospace;}
+        .inventory div { margin-bottom: 4px; color: #9ca3af; display: none; }
+        .inventory .owned { color: #f3f4f6; border-left: 3px solid var(--success); padding-left: 6px; }
+        .inventory .trust { color: var(--ca); font-weight: bold; border-left: 3px solid var(--ca); padding-left: 6px; }
+        .inventory .received { color: var(--primary); font-weight: bold; border-left: 3px solid var(--primary); padding-left: 6px; }
+
+        #chat-bubble {
+            position: absolute; bottom: 25px; left: 50%; transform: translateX(-50%);
+            width: 85%; background: #ffffff; color: #111827; padding: 25px;
+            border-radius: 18px; z-index: 50; box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+            display: flex; flex-direction: column; align-items: center;
+        }
+        #chat-bubble::before {
+            content: ''; position: absolute; top: -15px; left: 50%; transform: translateX(-50%);
+            border-left: 15px solid transparent; border-right: 15px solid transparent; border-bottom: 15px solid #ffffff;
+        }
+        #main-msg { font-size: 1.5rem; font-weight: 800; color: var(--primary); margin-bottom: 8px; }
+        #sub-msg { font-size: 1.1rem; color: #374151; line-height: 1.5; font-weight: 500; text-align: center; max-width: 800px; }
+
+        .line-connector {
+            position: absolute;
+            height: 4px;
+            background: var(--primary);
+            z-index: 1000;
+            transform-origin: top left;
+            transition: width 0.8s ease-out;
+            box-shadow: 0 0 12px var(--primary);
+            pointer-events: none;
+        }
+        .line-connector::after {
+            content: '▶';
+            position: absolute;
+            right: -6px;
+            top: -7px;
+            font-size: 14px;
+            color: inherit;
+        }
+
+        .packet-label {
+            position: absolute;
+            padding: 5px 14px;
+            background: #fff;
+            color: #000;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 800;
+            z-index: 1001;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            border: 2px solid var(--primary);
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s, top 0.3s;
+            white-space: nowrap;
+        }
+        .pulse { animation: pulse-key 1.5s infinite; color: var(--success) !important; font-weight: bold; }
+        @keyframes pulse-key { 0% { opacity: 0.4; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2 style="text-align: center; margin-bottom: 15px;">Understanding TLS mTLS</h2>
+
+    <div class="control-panel">
+        <div class="control-group">
+            <span class="label">Protocol:</span>
+            <button class="btn active" id="btn-oneway" onclick="updateConfig('protocol', 'one-way', this)">One-way TLS</button>
+            <button class="btn" id="btn-mtls" onclick="updateConfig('protocol', 'mutual', this)">mTLS (Mutual)</button>
+        </div>
+        <div class="control-group">
+            <span class="label">Trust Architecture:</span>
+            <button class="btn active" id="btn-root" onclick="updateConfig('trust', 'ca', this)">Root CA (Standard PKI)</button>
+            <button class="btn" id="btn-self" onclick="updateConfig('trust', 'self', this)">Self-Signed (Manual)</button>
+        </div>
+    </div>
+
+    <div class="stage" id="stage">
+        <div class="node" id="node-ca"><div class="icon">🏛️</div><strong id="ca-text">Root CA (Issuer)</strong></div>
+        
+        <div class="node" id="node-client">
+            <div class="icon">📟</div><strong>Device</strong>
+            <div class="inventory" id="inv-client">
+                <div id="inv-c-ca" class="trust">[Storage] Root CA</div>
+                <div id="inv-c-key" class="owned">[Storage] Device Key</div>
+                <div id="inv-c-crt" class="owned">[Storage] Device Cert</div>
+                <div id="inv-c-trust-scrt" class="trust">[Storage] Trusted: Server Cert</div>
+                <div id="inv-c-scrt" class="received">Recv: Server Cert</div>
+                <div id="inv-c-sess" class="owned" style="color:var(--success)">Session Key 🔑</div>
+            </div>
+        </div>
+
+        <div class="node" id="node-server">
+            <div class="icon">☁️</div><strong>Cloud Server</strong>
+            <div class="inventory" id="inv-server">
+                <div id="inv-s-key" class="owned">[Storage] Server Key</div>
+                <div id="inv-s-crt" class="owned">[Storage] Server Cert</div>
+                <div id="inv-s-ca" class="trust">[Storage] Root CA</div>
+                <div id="inv-s-trust-ccrt" class="trust">[Storage] Trusted: Device Cert</div>
+                <div id="inv-s-ccrt" class="received">Recv: Device Cert</div>
+                <div id="inv-s-sess" class="owned" style="color:var(--success)">Session Key 🔑</div>
+            </div>
+        </div>
+
+        <div id="chat-bubble">
+            <div id="main-msg">Ready</div>
+            <div id="sub-msg">Select settings and press Start to see how we build the trust chain.</div>
+            <div style="display:flex; gap:12px; margin-top: 15px;">
+                <button class="nav-btn btn-prev" id="prev-btn" onclick="changeStep(-1)" style="display:none;">← Back</button>
+                <button class="nav-btn btn-next" id="next-btn" onclick="changeStep(1)" style="display:none;">Next Step →</button>
+                <button class="nav-btn btn-start" id="start-btn" onclick="startSimulation()">Start Simulation</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let config = { protocol: 'one-way', trust: 'ca' };
+    let currentStep = -1;
+    let steps = [];
+    const stage = document.getElementById('stage');
+
+    const mainMsg = document.getElementById('main-msg');
+    const subMsg = document.getElementById('sub-msg');
+    const prevBtn = document.getElementById('prev-btn');
+    const nextBtn = document.getElementById('next-btn');
+    const startBtn = document.getElementById('start-btn');
+
+    function updateConfig(type, value, btn) {
+        config[type] = value;
+        btn.parentNode.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('node-ca').style.opacity = config.trust === 'self' ? '0.1' : '1';
+        resetSimulation();
+    }
+
+    function resetSimulation() {
+        cleanup();
+        currentStep = -1;
+        mainMsg.innerText = "System Ready";
+        subMsg.innerText = `Mode: ${config.protocol.toUpperCase()} | Trust: ${config.trust === 'ca' ? 'Root CA' : 'Self-Signed'}`;
+        startBtn.style.display = 'inline-block';
+        prevBtn.style.display = 'none';
+        nextBtn.style.display = 'none';
+        updateInventory();
+    }
+
+    function cleanup() {
+        document.querySelectorAll('.line-connector, .packet-label').forEach(el => el.remove());
+        document.querySelectorAll('.inventory div').forEach(el => el.classList.remove('pulse'));
+    }
+
+    function drawConnection(fromId, toId, text, color = null, delay = 0, yOffset = -50) {
+        setTimeout(() => {
+            const fromNode = document.getElementById(fromId);
+            const toNode = document.getElementById(toId);
+            const fromRect = fromNode.getBoundingClientRect();
+            const toRect = toNode.getBoundingClientRect();
+            const stageRect = stage.getBoundingClientRect();
+
+            const x1 = fromRect.left - stageRect.left + (fromRect.width / 2);
+            const y1 = fromRect.top - stageRect.top + 35;
+            const x2 = toRect.left - stageRect.left + (toRect.width / 2);
+            const y2 = toRect.top - stageRect.top + 35;
+
+            const length = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+            const angle = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+
+            const line = document.createElement('div');
+            line.className = 'line-connector';
+            if (color) {
+                line.style.background = color;
+                line.style.boxShadow = `0 0 12px ${color}`;
+            }
+            line.style.left = x1 + 'px';
+            line.style.top = y1 + 'px';
+            line.style.width = '0px';
+            line.style.transform = `rotate(${angle}deg)`;
+            stage.appendChild(line);
+
+            const label = document.createElement('div');
+            label.className = 'packet-label';
+            label.innerText = text;
+            if (color) { label.style.borderColor = color; label.style.color = color; }
+            label.style.left = (x2 - 50) + 'px';
+            label.style.top = (y2 + yOffset) + 'px';
+            stage.appendChild(label);
+
+            setTimeout(() => {
+                line.style.width = (length - 15) + 'px';
+                setTimeout(() => { label.style.opacity = '1'; }, 400);
+            }, 50);
+        }, delay);
+    }
+
+    function updateInventory() {
+        document.querySelectorAll('.inventory div').forEach(el => el.style.display = 'none');
+        document.getElementById('inv-s-key').style.display = 'block';
+        
+        const getIdx = (name) => steps.findIndex(s => s.internalName === name);
+
+        if (currentStep >= 0) {
+            document.getElementById('inv-s-crt').style.display = 'block';
+            if (config.trust === 'self' && config.protocol === 'mutual') {
+                document.getElementById('inv-c-key').style.display = 'block';
+                document.getElementById('inv-c-crt').style.display = 'block';
+            }
+            if (config.trust === 'ca') {
+                document.getElementById('inv-s-ca').style.display = 'block';
+            }
+        }
+        if (currentStep >= 1) {
+            if (config.trust === 'ca') {
+                document.getElementById('inv-c-ca').style.display = 'block';
+                if (config.protocol === 'mutual') {
+                    document.getElementById('inv-c-key').style.display = 'block';
+                    document.getElementById('inv-c-crt').style.display = 'block';
+                }
+            } else {
+                document.getElementById('inv-c-trust-scrt').style.display = 'block';
+                if (config.protocol === 'mutual') document.getElementById('inv-s-trust-ccrt').style.display = 'block';
+            }
+        }
+        if (currentStep >= getIdx("server_cert_sent") && getIdx("server_cert_sent") !== -1) document.getElementById('inv-c-scrt').style.display = 'block';
+        if (currentStep >= getIdx("client_cert_sent") && getIdx("client_cert_sent") !== -1) document.getElementById('inv-s-ccrt').style.display = 'block';
+        if (currentStep >= getIdx("handshake_finished") && getIdx("handshake_finished") !== -1) {
+            document.getElementById('inv-c-sess').style.display = 'block';
+            document.getElementById('inv-s-sess').style.display = 'block';
+        }
+    }
+
+    function buildSteps() {
+        steps = [];
+        let i = 1;
+
+        // --- Step 1: Identity & CSR ---
+        steps.push({
+            m: `Step ${i++}: Identity & CSR`, internalName: "init",
+            s: config.trust === 'ca' ? 
+               "Phase 1: Server generates Private Key and CSR. The CSR is sent to Root CA, which signs it to issue the Server Cert." : 
+               (config.protocol === 'mutual' ? "Self-Signed Mode: Both Cloud and Device generate their own self-signed certificates locally. No CA involved." : "Self-Signed Mode: Cloud Server generates its own certificate. Device stays passive in this phase."),
+            a: () => { 
+                if(config.trust === 'ca') { 
+                    drawConnection('node-server', 'node-ca', '📄 CSR Request', 'var(--primary)', 0, -20);
+                    drawConnection('node-ca', 'node-server', '📜 Issue Server Cert', 'var(--ca)', 1000, -50); 
+                    if(config.protocol === 'mutual') {
+                        const l = document.createElement('div');
+                        l.className = 'packet-label';
+                        l.innerText = '✍️ Device Cert (Signed by CA)';
+                        l.style.left = '45%'; l.style.top = '100px'; l.style.opacity = '1';
+                        l.style.borderColor = 'var(--ca)';
+                        stage.appendChild(l);
+                    }
+                } else {
+                    const l1 = document.createElement('div');
+                    l1.className = 'packet-label'; l1.innerText = '⚙️ Server Cert (Self-signed)';
+                    l1.style.right = '50px'; l1.style.top = '170px'; l1.style.opacity = '1';
+                    stage.appendChild(l1);
+                    if(config.protocol === 'mutual') {
+                        const l2 = document.createElement('div');
+                        l2.className = 'packet-label'; l2.innerText = '⚙️ Device Cert/Key (Built-in)';
+                        l2.style.left = '50px'; l2.style.top = '170px'; l2.style.opacity = '1';
+                        stage.appendChild(l2);
+                    }
+                }
+            }
+        });
+
+        // --- Step 2: Provisioning ---
+        steps.push({
+            m: `Step ${i++}: Asset Provisioning`, internalName: "provisioning",
+            s: config.trust === 'ca' ? 
+               (config.protocol === 'mutual' ? "Provisioning:Root CA issues device Key and Cert and three files are imported to the device." : "Provisioning: Root CA is imported to the device ready for verify the Server's cert.") : 
+               (config.protocol === 'mutual' ? "Manual Swap: Admin manually exchanges certificates between Server and Device to establish cross-trust." : "Manual Trust: Admin manually imports the Server Cert into the Device's trust list."),
+            a: () => { 
+                if(config.trust === 'ca') {
+                    drawConnection('node-ca', 'node-client', '⬇️ Import Root CA', null, 0, -85); 
+                    if(config.protocol === 'mutual') {
+                        drawConnection('node-ca', 'node-client', '🔑 Device Key', null, 300, -50);
+                        drawConnection('node-ca', 'node-client', '📜 Device Cert', null, 600, -15);
+                    }
+                } else {
+                    drawConnection('node-server', 'node-client', '⬇️ Import Server Cert', 'var(--ca)', 0, -50);
+                    if(config.protocol === 'mutual') {
+                        drawConnection('node-client', 'node-server', '⬇️ Import Device Cert', 'var(--ca)', 400, -50);
+                    }
+                }
+            }
+        });
+
+        steps.push({ m: `Step ${i++}: Handshake Initiation`, internalName: "hello", s: "Handshake Start: Device initiates connection request and proposes supported security parameters.", a: () => drawConnection('node-client', 'node-server', '👋 Client Hello') });
+        
+        steps.push({ m: `Step ${i++}: Server Proof`, internalName: "server_cert_sent", s: "Server Authentication: Server sends its Server Cert to prove its identity to the client.", a: () => drawConnection('node-server', 'node-client', '📜 Server Cert') });
+        
+        steps.push({
+            m: `Step ${i++}: One-way Validation`, internalName: "verify_server",
+            s: config.trust === 'ca' ? "Device uses Root CA to verify Server cert. This ensures the Server is trusted." : "Device verifies Server Cert against its manual trust list.",
+            a: () => document.getElementById(config.trust === 'ca' ? 'inv-c-ca' : 'inv-c-trust-scrt').classList.add('pulse')
+        });
+
+        if (config.protocol === 'mutual') {
+            steps.push({ m: `Step ${i++}: Mutual Auth Request`, internalName: "mtls_req", s: "mTLS Step: Server requests the Device to present its own certificate for verification.", a: () => drawConnection('node-server', 'node-client', '❓ Auth Request') });
+            steps.push({ m: `Step ${i++}: Device Proof`, internalName: "client_cert_sent", s: "mTLS Step: Device sends its Device Cert back to Server for client authentication.", a: () => drawConnection('node-client', 'node-server', '📜 Device Cert') });
+            steps.push({
+                m: `Step ${i++}: Mutual Validation`, internalName: "verify_client",
+                s: config.trust === 'ca' ? "Server uses Root CA to verify Device's certificate. Both parties are now verified." : "Two-way Verification: Server verifies Device Cert against its manual trust list.",
+                a: () => document.getElementById(config.trust === 'ca' ? 'inv-s-ca' : 'inv-s-trust-ccrt').classList.add('pulse')
+            });
+        }
+
+        steps.push({ m: `Step ${i++}: Secure Key Exchange`, internalName: "key_exchange", s: "Secrets Exchange: Both parties derive a unique Session Key for symmetric encryption.", a: () => drawConnection('node-client', 'node-server', '🔐 Key Exchange') });
+        steps.push({ m: `Step ${i++}: Handshake Finalized`, internalName: "handshake_finished", s: "Success: Handshake complete. Both parties trust each other and have synced encryption keys.", a: () => {} });
+        steps.push({ m: `Step ${i++}: Secure Data Flow`, internalName: "data_flow", s: "Encryption Active: Encrypted data moves safely between Device and Cloud Server.", a: () => drawConnection('node-client', 'node-server', '🔒 [Sensor Data] 🔒', 'var(--success)') });
+    }
+
+    function startSimulation() { buildSteps(); currentStep = 0; startBtn.style.display = 'none'; prevBtn.style.display = 'inline-block'; nextBtn.style.display = 'inline-block'; updateUI(); }
+    function changeStep(dir) { currentStep += dir; if (currentStep < 0) currentStep = 0; if (currentStep >= steps.length) currentStep = steps.length - 1; updateUI(); }
+    function updateUI() { cleanup(); const s = steps[currentStep]; mainMsg.innerText = s.m; subMsg.innerText = s.s; prevBtn.disabled = (currentStep === 0); nextBtn.style.display = (currentStep === steps.length - 1) ? 'none' : 'inline-block'; startBtn.style.display = (currentStep === steps.length - 1) ? 'inline-block' : 'none'; updateInventory(); s.a(); }
+    resetSimulation();
+</script>
+
+</body>
+</html>
