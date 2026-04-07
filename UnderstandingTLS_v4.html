@@ -1,0 +1,930 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Understanding TLS & mTLS — ADAM FAE Training</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --surface: #161b22;
+            --surface-2: #21262d;
+            --border: #30363d;
+            --primary: #2f81f7;
+            --primary-dim: rgba(47,129,247,0.12);
+            --server: #a371f7;
+            --client: #39c5cf;
+            --ca: #e3b341;
+            --success: #3fb950;
+            --danger: #f85149;
+            --text: #e6edf3;
+            --text-muted: #8b949e;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+        /* ── Header ── */
+        .header { background: linear-gradient(160deg, #0d1117 0%, #161b22 60%, #0d1117 100%); border-bottom: 1px solid var(--border); padding: 16px 0 0; text-align: center; }
+        .header h1 { font-size: 1.45rem; font-weight: 800; background: linear-gradient(135deg, var(--primary) 20%, var(--client)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; margin-bottom: 3px; }
+        .header p { color: var(--text-muted); font-size: 0.78rem; margin-bottom: 14px; }
+        .tab-nav { display: flex; justify-content: center; border-top: 1px solid var(--border); }
+        .tab-btn { padding: 10px 28px; background: transparent; border: none; border-bottom: 3px solid transparent; color: var(--text-muted); cursor: pointer; font-size: 0.88rem; font-weight: 500; transition: all 0.2s; position: relative; top: 1px; }
+        .tab-btn:hover { color: var(--text); }
+        .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .container { max-width: 1060px; margin: 0 auto; padding: 14px 18px; }
+
+        /* ── Controls ── */
+        .sim-controls { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 11px 18px; margin-bottom: 11px; display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+        .ctrl-group { display: flex; align-items: center; gap: 8px; }
+        .ctrl-label { font-size: 0.74rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.07em; white-space: nowrap; }
+        .toggle-group { display: flex; background: var(--bg); border-radius: 7px; border: 1px solid var(--border); overflow: hidden; }
+        .toggle-btn { padding: 6px 16px; background: transparent; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.82rem; transition: all 0.2s; }
+        .toggle-btn.active { background: var(--primary); color: #fff; font-weight: 600; }
+        .mode-pill { margin-left: auto; font-size: 0.74rem; color: var(--text-muted); background: var(--surface-2); border: 1px solid var(--border); padding: 4px 12px; border-radius: 20px; }
+        .mode-pill span { color: var(--primary); font-weight: 600; }
+
+        /* ── Progress ── */
+        .progress-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+        .progress-bar-bg { flex: 1; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+        .progress-bar-fill { height: 100%; background: linear-gradient(90deg, var(--primary), var(--client)); border-radius: 2px; transition: width 0.4s ease; width: 0%; }
+        .progress-label { font-size: 0.72rem; color: var(--text-muted); white-space: nowrap; min-width: 70px; text-align: right; }
+
+        /* ── Stage ── */
+        .stage { height: 460px; position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+        .stage-grid { position: absolute; inset: 0; background-image: radial-gradient(circle, #30363d 1px, transparent 1px); background-size: 32px 32px; opacity: 0.2; pointer-events: none; }
+
+        /* ── Nodes ── */
+        .node { position: absolute; text-align: center; z-index: 20; width: 100px; }
+        .node-icon { width: 56px; height: 56px; border-radius: 13px; margin: 0 auto 6px; display: flex; align-items: center; justify-content: center; font-size: 24px; transition: all 0.4s; position: relative; }
+        .node-icon::after { content: ''; position: absolute; inset: -4px; border-radius: 16px; border: 2px solid transparent; transition: all 0.4s; pointer-events: none; }
+        .node-label { font-size: 0.77rem; font-weight: 700; color: var(--text); line-height: 1.3; }
+        .node-sub { font-size: 0.63rem; color: var(--text-muted); margin-top: 2px; }
+
+        #node-ca { top: 10px; left: 50%; transform: translateX(-50%); }
+        #node-ca .node-icon { background: rgba(227,179,65,0.12); }
+        #node-ca .node-icon::after { border-color: var(--ca); box-shadow: 0 0 16px rgba(227,179,65,0.2); }
+
+        #node-client { top: 98px; left: 30px; }
+        #node-client .node-icon { background: rgba(57,197,207,0.11); }
+        #node-client .node-icon::after { border-color: var(--client); }
+        #node-client.active .node-icon::after { box-shadow: 0 0 22px rgba(57,197,207,0.6); }
+
+        #node-server { top: 98px; right: 30px; }
+        #node-server .node-icon { background: rgba(163,113,247,0.11); }
+        #node-server .node-icon::after { border-color: var(--server); }
+        #node-server.active .node-icon::after { box-shadow: 0 0 22px rgba(163,113,247,0.6); }
+
+        .ca-hidden { opacity: 0.07 !important; pointer-events: none; transition: opacity 0.3s; }
+
+        /* ── Node Inventories inside stage ── */
+        .node-inv { position: absolute; z-index: 20; background: rgba(13,17,23,0.85); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font-size: 0.66rem; font-family: 'Cascadia Code', 'Consolas', monospace; min-width: 162px; backdrop-filter: blur(4px); }
+        #inv-client { top: 220px; left: 8px; }
+        #inv-server { top: 220px; right: 8px; }
+        .inv-title { font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; opacity: 0.6; }
+        .inv-row { display: none; padding: 2px 5px; border-left: 2px solid; border-radius: 0 3px 3px 0; margin-bottom: 2px; line-height: 1.35; }
+        .inv-row.owned    { border-color: var(--success); color: #a7f3d0; background: rgba(63,185,80,0.06); }
+        .inv-row.trust    { border-color: var(--ca);      color: #fde68a; background: rgba(227,179,65,0.06); }
+        .inv-row.received { border-color: var(--primary); color: #93c5fd; background: rgba(47,129,247,0.06); }
+        .inv-row.session  { border-color: var(--success); color: var(--success); background: rgba(63,185,80,0.1); font-weight: 700; }
+        @keyframes inv-pulse { 0%,100%{opacity:0.35} 50%{opacity:1} }
+        .inv-row.pulse { animation: inv-pulse 1.3s infinite; }
+
+        /* ── Connection Lines ── */
+        .conn-line { position: absolute; height: 2px; transform-origin: left center; z-index: 10; pointer-events: none; transition: width 1.5s ease-out; }
+        .conn-line::after { content: '▶'; position: absolute; right: -10px; top: -8px; font-size: 11px; color: inherit; }
+
+        /* ── Packet Animation ── */
+        .packet-dot { position: absolute; width: 11px; height: 11px; border-radius: 50%; z-index: 30; pointer-events: none; transition: left 1.8s ease-in-out, top 1.8s ease-in-out; }
+        .pkt-label { position: absolute; padding: 4px 12px; background: var(--surface-2); border-radius: 20px; font-size: 0.72rem; font-weight: 700; z-index: 25; border: 1.5px solid; white-space: nowrap; pointer-events: none; box-shadow: 0 4px 14px rgba(0,0,0,0.55); opacity: 0; transition: opacity 0.5s; }
+
+        /* ── Chat Bubble ── */
+        #chat-bubble { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); width: 88%; background: #ffffff; color: #111827; padding: 14px 20px 12px; border-radius: 14px; z-index: 50; box-shadow: 0 14px 40px rgba(0,0,0,0.6); }
+        #chat-bubble::before { content: ''; position: absolute; top: -12px; left: 50%; transform: translateX(-50%); border-left: 12px solid transparent; border-right: 12px solid transparent; border-bottom: 12px solid #ffffff; }
+        #bubble-step  { font-size: 0.69rem; font-weight: 700; color: var(--primary); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 3px; }
+        #bubble-title { font-size: 1.05rem; font-weight: 800; color: #1e3a5f; margin-bottom: 4px; }
+        #bubble-desc  { font-size: 0.83rem; color: #374151; line-height: 1.5; }
+
+        /* ── Modal ── */
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.78); backdrop-filter: blur(5px); z-index: 2000; display: flex; align-items: center; justify-content: center; }
+        .modal-overlay.hidden { display: none; }
+        .modal-box { background: #1a2535; border: 2px solid var(--primary); border-radius: 16px; padding: 26px 28px 22px; max-width: 560px; width: 92%; box-shadow: 0 24px 80px rgba(0,0,0,0.85); animation: modal-in 0.22s ease-out; }
+        @keyframes modal-in { from { transform: scale(0.93) translateY(8px); opacity:0; } to { transform: scale(1) translateY(0); opacity:1; } }
+        .modal-badge { display: inline-block; background: var(--primary-dim); color: var(--primary); font-size: 0.7rem; font-weight: 700; padding: 3px 12px; border-radius: 12px; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.07em; }
+        .modal-question { font-size: 1rem; font-weight: 700; color: var(--text); margin-bottom: 14px; line-height: 1.5; }
+        .modal-options { display: grid; gap: 8px; }
+        .modal-opt { padding: 9px 14px; background: var(--surface-2); border: 1.5px solid var(--border); border-radius: 8px; cursor: pointer; font-size: 0.82rem; color: var(--text); text-align: left; transition: all 0.18s; width: 100%; }
+        .modal-opt:hover:not([disabled]) { border-color: var(--primary); background: var(--primary-dim); }
+        .modal-opt.correct  { border-color: var(--success) !important; background: rgba(63,185,80,0.13) !important; color: #a7f3d0 !important; }
+        .modal-opt.wrong    { border-color: var(--danger)  !important; background: rgba(248,81,73,0.1)  !important; color: #fca5a5 !important; }
+        .modal-opt[disabled] { cursor: default; }
+        .modal-exp { display: none; margin-top: 10px; padding: 9px 13px; background: rgba(47,129,247,0.07); border-left: 3px solid var(--primary); border-radius: 0 7px 7px 0; font-size: 0.78rem; color: var(--text-muted); line-height: 1.6; }
+        .modal-exp.show { display: block; }
+        .modal-footer { display: flex; justify-content: flex-end; margin-top: 14px; }
+        .modal-continue { padding: 9px 28px; background: var(--primary); color: #fff; border: none; border-radius: 8px; font-size: 0.88rem; font-weight: 600; cursor: pointer; transition: filter 0.2s; }
+        .modal-continue:disabled { opacity: 0.3; cursor: default; }
+        .modal-continue:not(:disabled):hover { filter: brightness(1.1); }
+
+        /* ── Nav ── */
+        .nav-area { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 12px; }
+        .sim-btn { padding: 9px 22px; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 0.87rem; transition: all 0.2s; }
+        .sim-btn:disabled { opacity: 0.25; cursor: not-allowed; }
+        .btn-prev    { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
+        .btn-prev:not(:disabled):hover { border-color: var(--primary); color: var(--primary); }
+        .btn-next    { background: var(--success); color: #fff; }
+        .btn-next:not(:disabled):hover { filter: brightness(1.1); }
+        .btn-start   { background: var(--primary); color: #fff; padding: 9px 36px; }
+        .btn-start:hover { filter: brightness(1.1); }
+        .btn-restart { background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); }
+
+        /* ═══ CONCEPTS ═══ */
+        .concepts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+        .concept-card { background: var(--surface); border: 1px solid var(--border); border-radius: 11px; padding: 18px; transition: border-color 0.2s, transform 0.2s; }
+        .concept-card:hover { border-color: var(--primary); transform: translateY(-2px); }
+        .concept-icon { font-size: 1.75rem; margin-bottom: 8px; }
+        .concept-title { font-size: 0.96rem; font-weight: 700; margin-bottom: 2px; }
+        .concept-en { font-size: 0.7rem; color: var(--primary); font-weight: 600; margin-bottom: 8px; }
+        .concept-desc { font-size: 0.81rem; color: var(--text-muted); line-height: 1.6; }
+        .concept-tag { display: inline-block; margin-top: 9px; padding: 3px 9px; border-radius: 12px; font-size: 0.67rem; font-weight: 700; background: var(--primary-dim); color: var(--primary); }
+        .compare-section { margin-top: 24px; }
+        .compare-title { font-size: 1rem; font-weight: 700; margin-bottom: 12px; }
+        .compare-table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 11px; overflow: hidden; border: 1px solid var(--border); font-size: 0.81rem; }
+        .compare-table th { background: var(--surface-2); padding: 10px 14px; text-align: left; font-size: 0.72rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); }
+        .compare-table td { padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--text); vertical-align: middle; }
+        .compare-table tr:last-child td { border-bottom: none; }
+        .compare-table tr:hover td { background: rgba(255,255,255,0.02); }
+        .tag-green { color: var(--success); font-weight: 600; }
+        .tag-yellow { color: var(--ca); font-weight: 600; }
+        .tag-blue { color: var(--primary); font-weight: 600; }
+        .tag-muted { color: var(--text-muted); }
+
+        /* ═══ QUIZ TAB ═══ */
+        .quiz-header { text-align: center; margin-bottom: 24px; }
+        .quiz-header h2 { font-size: 1.3rem; font-weight: 700; margin-bottom: 6px; }
+        .quiz-header p { color: var(--text-muted); font-size: 0.86rem; }
+        .quiz-question { background: var(--surface); border: 1px solid var(--border); border-radius: 11px; padding: 18px 20px; margin-bottom: 12px; }
+        .q-num { font-size: 0.7rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 7px; }
+        .q-text { font-size: 0.94rem; font-weight: 600; margin-bottom: 12px; line-height: 1.5; }
+        .q-options { display: grid; gap: 6px; }
+        .q-option { padding: 9px 14px; background: var(--surface-2); border: 1.5px solid var(--border); border-radius: 7px; cursor: pointer; font-size: 0.82rem; transition: all 0.18s; text-align: left; color: var(--text); width: 100%; }
+        .q-option:hover:not([disabled]) { border-color: var(--primary); background: var(--primary-dim); }
+        .q-option.correct  { border-color: var(--success) !important; background: rgba(63,185,80,0.1)  !important; color: #a7f3d0 !important; }
+        .q-option.wrong    { border-color: var(--danger)  !important; background: rgba(248,81,73,0.08) !important; color: #fca5a5 !important; }
+        .q-option[disabled] { cursor: default; }
+        .q-explanation { display: none; margin-top: 9px; padding: 9px 13px; background: rgba(47,129,247,0.07); border-left: 3px solid var(--primary); border-radius: 0 7px 7px 0; font-size: 0.79rem; color: var(--text-muted); line-height: 1.6; }
+        .q-explanation.show { display: block; }
+        .score-panel { display: none; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 32px 22px; text-align: center; margin-top: 18px; }
+        .score-panel.show { display: block; }
+        .score-num { font-size: 2.8rem; font-weight: 800; background: linear-gradient(135deg, var(--primary), var(--success)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+        .score-sub { font-size: 0.82rem; color: var(--text-muted); margin-bottom: 9px; }
+        .score-msg { font-size: 1rem; font-weight: 600; margin-bottom: 20px; }
+        .btn-retry { padding: 9px 32px; background: var(--primary); color: #fff; border: none; border-radius: 8px; font-size: 0.88rem; font-weight: 600; cursor: pointer; }
+        .btn-retry:hover { filter: brightness(1.1); }
+    </style>
+</head>
+<body>
+
+<!-- ═══ QUIZ MODAL ═══ -->
+<div class="modal-overlay hidden" id="quiz-modal">
+    <div class="modal-box">
+        <div class="modal-badge">🧠 Quick Check — Answer before continuing</div>
+        <div class="modal-question" id="modal-question"></div>
+        <div class="modal-options" id="modal-options"></div>
+        <div class="modal-exp" id="modal-exp"></div>
+        <div class="modal-footer">
+            <button class="modal-continue" id="modal-continue" disabled onclick="closeModal()">Continue →</button>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ HEADER ═══ -->
+<div class="header">
+    <h1>🔐 Understanding TLS &amp; mTLS</h1>
+    <p>Interactive Certificate Trust Chain Training &nbsp;·&nbsp; ADAM FAE Program</p>
+    <div class="tab-nav">
+        <button class="tab-btn active" onclick="switchTab('simulation',this)">🎬 Simulation</button>
+        <button class="tab-btn" onclick="switchTab('concepts',this)">📖 Concepts</button>
+        <button class="tab-btn" onclick="switchTab('quiz',this)">✍️ Knowledge Check</button>
+    </div>
+</div>
+
+<!-- ═══ SIMULATION TAB ═══ -->
+<div id="tab-simulation" class="tab-content active">
+<div class="container">
+
+    <div class="sim-controls">
+        <div class="ctrl-group">
+            <span class="ctrl-label">Protocol</span>
+            <div class="toggle-group">
+                <button class="toggle-btn active" onclick="setConfig('protocol','one-way',this)">One-way TLS</button>
+                <button class="toggle-btn" onclick="setConfig('protocol','mutual',this)">mTLS (Mutual)</button>
+            </div>
+        </div>
+        <div class="ctrl-group">
+            <span class="ctrl-label">Trust Model</span>
+            <div class="toggle-group">
+                <button class="toggle-btn active" onclick="setConfig('trust','ca',this)">Root CA (PKI)</button>
+                <button class="toggle-btn" onclick="setConfig('trust','self',this)">Self-Signed</button>
+            </div>
+        </div>
+        <div class="mode-pill" id="mode-indicator">Mode: <span>One-way TLS + Root CA</span></div>
+    </div>
+
+    <div class="progress-row">
+        <div class="progress-bar-bg"><div class="progress-bar-fill" id="progress-fill"></div></div>
+        <div class="progress-label" id="progress-label">Not started</div>
+    </div>
+
+    <div class="stage" id="stage">
+        <div class="stage-grid"></div>
+
+        <div class="node" id="node-ca">
+            <div class="node-icon">🏛️</div>
+            <div class="node-label">Root CA</div>
+            <div class="node-sub">Certificate Authority</div>
+        </div>
+        <div class="node" id="node-client">
+            <div class="node-icon">📟</div>
+            <div class="node-label">Device</div>
+            <div class="node-sub">ADAM / IoT Client</div>
+        </div>
+        <div class="node" id="node-server">
+            <div class="node-icon">☁️</div>
+            <div class="node-label">Cloud Server</div>
+            <div class="node-sub">Remote Endpoint</div>
+        </div>
+
+        <!-- Certificate inventory panels inside stage -->
+        <div class="node-inv" id="inv-client">
+            <div class="inv-title" style="color:var(--client)">📟 Device Storage</div>
+            <div class="inv-row trust"    id="inv-c-ca">🏛️ Root CA Cert</div>
+            <div class="inv-row owned"    id="inv-c-key">🔑 Device Private Key</div>
+            <div class="inv-row owned"    id="inv-c-crt">📜 Device Certificate</div>
+            <div class="inv-row trust"    id="inv-c-trust-scrt">📌 Trusted: Server Cert</div>
+            <div class="inv-row received" id="inv-c-scrt">📥 Received: Server Cert</div>
+            <div class="inv-row session"  id="inv-c-sess">🔐 Session Key ✓</div>
+        </div>
+        <div class="node-inv" id="inv-server">
+            <div class="inv-title" style="color:var(--server)">☁️ Server Storage</div>
+            <div class="inv-row owned"    id="inv-s-key">🔑 Server Private Key</div>
+            <div class="inv-row owned"    id="inv-s-crt">📜 Server Certificate</div>
+            <div class="inv-row trust"    id="inv-s-ca">🏛️ Root CA Cert</div>
+            <div class="inv-row trust"    id="inv-s-trust-ccrt">📌 Trusted: Device Cert</div>
+            <div class="inv-row received" id="inv-s-ccrt">📥 Received: Device Cert</div>
+            <div class="inv-row session"  id="inv-s-sess">🔐 Session Key ✓</div>
+        </div>
+
+        <div id="chat-bubble">
+            <div id="bubble-step"></div>
+            <div id="bubble-title">Ready</div>
+            <div id="bubble-desc">Select a protocol and trust model above, then press <strong>Start Simulation</strong>.</div>
+        </div>
+    </div>
+
+    <div class="nav-area">
+        <button class="sim-btn btn-prev"    id="btn-prev"    onclick="changeStep(-1)" disabled style="display:none">← Back</button>
+        <button class="sim-btn btn-next"    id="btn-next"    onclick="changeStep(1)"  style="display:none">Next Step →</button>
+        <button class="sim-btn btn-start"   id="btn-start"   onclick="startSim()">▶ Start Simulation</button>
+        <button class="sim-btn btn-restart" id="btn-restart" onclick="resetSim()" style="display:none">↺ Reset</button>
+    </div>
+
+</div>
+</div>
+
+<!-- ═══ CONCEPTS TAB ═══ -->
+<div id="tab-concepts" class="tab-content">
+<div class="container">
+    <div class="concepts-grid">
+        <div class="concept-card">
+            <div class="concept-icon">🔐</div>
+            <div class="concept-title">TLS</div>
+            <div class="concept-en">Transport Layer Security</div>
+            <div class="concept-desc">TLS creates an encrypted channel over the network, ensuring data cannot be eavesdropped or tampered with in transit. It is the successor to SSL and is used in HTTPS, MQTT over TLS, OPC UA, and more.</div>
+            <span class="concept-tag">Core Protocol</span>
+        </div>
+        <div class="concept-card">
+            <div class="concept-icon">🤝</div>
+            <div class="concept-title">mTLS</div>
+            <div class="concept-en">Mutual TLS</div>
+            <div class="concept-desc">Standard TLS only verifies the server. mTLS also requires the client to present a certificate, confirming the connecting device is authorized. Strongly recommended for IoT production deployments.</div>
+            <span class="concept-tag">Advanced Security</span>
+        </div>
+        <div class="concept-card">
+            <div class="concept-icon">🏛️</div>
+            <div class="concept-title">Root CA</div>
+            <div class="concept-en">Certificate Authority</div>
+            <div class="concept-desc">A trusted third party that signs certificates with its private key. Anyone trusting the same Root CA automatically trusts all certificates it issued — no manual setup needed per device.</div>
+            <span class="concept-tag">PKI Infrastructure</span>
+        </div>
+        <div class="concept-card">
+            <div class="concept-icon">✍️</div>
+            <div class="concept-title">Self-Signed Certificate</div>
+            <div class="concept-en">No CA Involvement</div>
+            <div class="concept-desc">Signed by the entity's own private key, without any CA. Fast to deploy, but both parties must manually exchange and import each other's certificate. Becomes unmanageable at scale.</div>
+            <span class="concept-tag">Simple Deployment</span>
+        </div>
+        <div class="concept-card">
+            <div class="concept-icon">📄</div>
+            <div class="concept-title">CSR</div>
+            <div class="concept-en">Certificate Signing Request</div>
+            <div class="concept-desc">The applicant packages their public key and identity info into a CSR and submits it to the CA. The CA signs it to produce an official certificate. The private key never leaves the applicant.</div>
+            <span class="concept-tag">Certificate Request</span>
+        </div>
+        <div class="concept-card">
+            <div class="concept-icon">🔑</div>
+            <div class="concept-title">Session Key</div>
+            <div class="concept-en">Temporary Symmetric Key</div>
+            <div class="concept-desc">After the handshake, both sides derive the same temporary symmetric key. All data is encrypted with it — much faster than asymmetric encryption. Each new connection creates a unique Session Key.</div>
+            <span class="concept-tag">Symmetric Encryption</span>
+        </div>
+        <div class="concept-card">
+            <div class="concept-icon">👋</div>
+            <div class="concept-title">TLS Handshake</div>
+            <div class="concept-en">Connection Negotiation Flow</div>
+            <div class="concept-desc">① Client Hello → ② Server presents certificate → ③ Client verifies → ④ (mTLS) Client presents certificate → ⑤ Both derive Session Key → ⑥ Encrypted communication begins.</div>
+            <span class="concept-tag">Core Flow</span>
+        </div>
+        <div class="concept-card">
+            <div class="concept-icon">⚖️</div>
+            <div class="concept-title">One-way vs. Mutual Auth</div>
+            <div class="concept-en">Authentication Scope</div>
+            <div class="concept-desc">One-way: only the device verifies the server — "am I connecting to the right server?" Mutual (mTLS): server also verifies the device — "is this an authorized device?" Use mutual in production.</div>
+            <span class="concept-tag">Security Trade-offs</span>
+        </div>
+    </div>
+    <div class="compare-section">
+        <div class="compare-title">📊 Mode Comparison</div>
+        <table class="compare-table">
+            <thead>
+                <tr><th>Mode</th><th>Trust Architecture</th><th>Device Verifies Server</th><th>Server Verifies Device</th><th>Complexity</th><th>Typical Use Case</th></tr>
+            </thead>
+            <tbody>
+                <tr><td><strong>One-way TLS + Root CA</strong></td><td>CA-issued certs</td><td class="tag-green">✓ Automatic</td><td class="tag-muted">✗ None</td><td class="tag-blue">★★☆</td><td>HTTPS / General API</td></tr>
+                <tr><td><strong>One-way TLS + Self-Signed</strong></td><td>Manual exchange</td><td class="tag-yellow">✓ Manual import</td><td class="tag-muted">✗ None</td><td class="tag-blue">★☆☆</td><td>Lab / Small deployments</td></tr>
+                <tr><td><strong>mTLS + Root CA</strong></td><td>CA-issued certs</td><td class="tag-green">✓ Automatic</td><td class="tag-green">✓ Automatic</td><td class="tag-blue">★★★</td><td>IoT production / Zero-trust</td></tr>
+                <tr><td><strong>mTLS + Self-Signed</strong></td><td>Manual exchange</td><td class="tag-yellow">✓ Manual import</td><td class="tag-yellow">✓ Manual import</td><td class="tag-blue">★★☆</td><td>Fixed peer / Closed systems</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+</div>
+
+<!-- ═══ KNOWLEDGE CHECK TAB ═══ -->
+<div id="tab-quiz" class="tab-content">
+<div class="container">
+    <div class="quiz-header">
+        <h2>Knowledge Check</h2>
+        <p>8 questions to test your understanding. Answers are revealed immediately after each selection.</p>
+    </div>
+    <div id="quiz-body"></div>
+    <div class="score-panel" id="score-panel">
+        <div class="score-sub">Your Score</div>
+        <div class="score-num" id="score-display">0 / 8</div>
+        <div class="score-msg" id="score-msg"></div>
+        <button class="btn-retry" onclick="initQuiz()">↺ Try Again</button>
+    </div>
+</div>
+</div>
+
+<script>
+// ══════════════════════════════════════════
+//  TAB SWITCHING
+// ══════════════════════════════════════════
+function switchTab(name, btn) {
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('tab-' + name).classList.add('active');
+    btn.classList.add('active');
+}
+
+// ══════════════════════════════════════════
+//  SIMULATION ENGINE
+// ══════════════════════════════════════════
+let config = { protocol: 'one-way', trust: 'ca' };
+let currentStep = -1;
+let steps = [];
+const stage = document.getElementById('stage');
+
+// ── Config change ──
+function setConfig(type, value, btn) {
+    config[type] = value;
+    btn.closest('.toggle-group').querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('node-ca').classList.toggle('ca-hidden', config.trust === 'self');
+    const lbl = config.protocol === 'one-way' ? 'One-way TLS' : 'mTLS (Mutual)';
+    const tst = config.trust === 'ca' ? 'Root CA' : 'Self-Signed';
+    document.getElementById('mode-indicator').innerHTML = `Mode: <span>${lbl} + ${tst}</span>`;
+    resetSim();
+}
+
+// ── Reset ──
+function resetSim() {
+    cleanup();
+    currentStep = -1;
+    document.getElementById('bubble-step').textContent  = '';
+    document.getElementById('bubble-title').textContent = 'Ready';
+    document.getElementById('bubble-desc').innerHTML    = 'Select a protocol and trust model above, then press <strong>Start Simulation</strong>.';
+    document.getElementById('progress-fill').style.width = '0%';
+    document.getElementById('progress-label').textContent = 'Not started';
+    document.getElementById('btn-start').style.display   = 'inline-block';
+    document.getElementById('btn-start').textContent     = '▶ Start Simulation';
+    document.getElementById('btn-start').onclick         = startSim;
+    document.getElementById('btn-prev').style.display    = 'none';
+    document.getElementById('btn-next').style.display    = 'none';
+    document.getElementById('btn-restart').style.display = 'none';
+    document.querySelectorAll('.inv-row').forEach(r => r.style.display = 'none');
+}
+
+function cleanup() {
+    document.querySelectorAll('.conn-line, .pkt-label, .packet-dot').forEach(e => e.remove());
+    document.querySelectorAll('.inv-row').forEach(e => e.classList.remove('pulse'));
+    document.querySelectorAll('.node').forEach(n => n.classList.remove('active'));
+}
+
+// ── Geometry helpers ──
+function nodeCenter(id) {
+    const icon = document.getElementById(id).querySelector('.node-icon');
+    const sr = stage.getBoundingClientRect(), r = icon.getBoundingClientRect();
+    return { x: r.left - sr.left + r.width / 2, y: r.top - sr.top + r.height / 2 };
+}
+
+function drawLine(fId, tId, color, delay) {
+    setTimeout(() => {
+        const f = nodeCenter(fId), t = nodeCenter(tId);
+        const dx = t.x-f.x, dy = t.y-f.y, len = Math.hypot(dx,dy), ang = Math.atan2(dy,dx)*180/Math.PI;
+        const ln = document.createElement('div');
+        ln.className = 'conn-line';
+        ln.style.cssText = `left:${f.x}px;top:${f.y}px;width:0;transform:rotate(${ang}deg);background:${color};box-shadow:0 0 8px ${color};color:${color};`;
+        stage.appendChild(ln);
+        requestAnimationFrame(() => requestAnimationFrame(() => { ln.style.width = (len-18)+'px'; }));
+    }, delay);
+}
+
+function animPkt(fId, tId, label, color, delay, yOff) {
+    setTimeout(() => {
+        const f = nodeCenter(fId), t = nodeCenter(tId);
+        const mx = (f.x+t.x)/2, my = (f.y+t.y)/2;
+        const dot = document.createElement('div');
+        dot.className = 'packet-dot';
+        dot.style.cssText = `left:${f.x-5}px;top:${f.y-5}px;background:${color};box-shadow:0 0 12px ${color};`;
+        stage.appendChild(dot);
+        requestAnimationFrame(() => requestAnimationFrame(() => { dot.style.left=(t.x-5)+'px'; dot.style.top=(t.y-5)+'px'; }));
+        setTimeout(() => dot.remove(), 2000);
+        const lbl = document.createElement('div');
+        lbl.className = 'pkt-label';
+        lbl.textContent = label;
+        lbl.style.cssText = `left:${mx-70}px;top:${my+(yOff||-30)}px;border-color:${color};color:${color};`;
+        stage.appendChild(lbl);
+        setTimeout(() => { lbl.style.opacity='1'; }, 900);
+    }, delay);
+}
+
+function hlNode(id)   { document.getElementById(id).classList.add('active'); }
+function showRow(id)  { const e=document.getElementById(id); if(e) e.style.display='block'; }
+function pulseRow(id) { const e=document.getElementById(id); if(e) e.classList.add('pulse'); }
+
+// ── Build steps (granular) ──
+function buildSteps() {
+    steps = [];
+    const isCA = config.trust==='ca', isMTLS = config.protocol==='mutual';
+    let n = 0; // step counter for display
+
+    function addStep(s) { steps.push(s); }
+
+    if (isCA) {
+        // 1. Server generates key + CSR
+        addStep({ title:'Server: Generate Private Key & CSR', stepN: ++n,
+            desc:'The server generates a Private Key locally. It then creates a Certificate Signing Request (CSR) containing its public key and identity information, ready to be submitted to the Root CA.',
+            action() { hlNode('node-server'); showRow('inv-s-key'); }
+        });
+        // 2. Server → CA: Send CSR
+        addStep({ title:'Server → CA: Submit CSR', stepN: ++n,
+            desc:'The server sends the CSR to the Root CA. The CA will review the identity information and decide whether to issue a certificate.',
+            action() {
+                hlNode('node-server');
+                drawLine('node-server','node-ca','var(--primary)',0);
+                animPkt('node-server','node-ca','📄 CSR (Certificate Signing Request)','var(--primary)',0,-28);
+            }
+        });
+        // 3. CA → Server: Issue Server Cert
+        addStep({ title:'CA → Server: Issue Server Certificate', stepN: ++n,
+            desc:'The Root CA signs the CSR with its private key and sends back the Server Certificate. This certificate is now trusted by anyone who has the Root CA certificate installed.',
+            action() {
+                hlNode('node-ca');
+                drawLine('node-ca','node-server','var(--ca)',0);
+                animPkt('node-ca','node-server','📜 Server Certificate (CA-signed)','var(--ca)',0,-28);
+            }
+        });
+        if (isMTLS) {
+            // 4. Device → CA: Send Device CSR
+            addStep({ title:'Device → CA: Submit Device CSR', stepN: ++n,
+                desc:'In mTLS, the device also needs its own certificate. It generates a Device Private Key and CSR, then submits the CSR to the Root CA.',
+                action() {
+                    hlNode('node-client');
+                    showRow('inv-c-key');
+                    drawLine('node-client','node-ca','var(--client)',0);
+                    animPkt('node-client','node-ca','📄 Device CSR','var(--client)',0,-28);
+                }
+            });
+            // 5. CA → Device: Issue Device Cert
+            addStep({ title:'CA → Device: Issue Device Certificate', stepN: ++n,
+                desc:'The CA signs the Device CSR and returns the Device Certificate. This certificate proves the device\'s identity and is trusted by anyone with the same Root CA.',
+                action() {
+                    hlNode('node-ca');
+                    drawLine('node-ca','node-client','var(--ca)',0);
+                    animPkt('node-ca','node-client','📜 Device Certificate (CA-signed)','var(--ca)',0,-28);
+                }
+            });
+        }
+        // Provisioning
+        addStep({ title:'Provisioning: Deploy Files to Device', stepN: ++n,
+            desc: isMTLS
+                ? 'Three files are deployed to the device before deployment: the Root CA certificate (to verify the server), the Device Private Key, and the Device Certificate.'
+                : 'The Root CA certificate is deployed to the device. This allows the device to automatically verify any certificate issued by this CA — including the server\'s.',
+            action() {
+                drawLine('node-ca','node-client','var(--primary)',0);
+                animPkt('node-ca','node-client', isMTLS ? '⬇️ Root CA + Device Key + Device Cert' : '⬇️ Root CA Certificate', 'var(--primary)',0,-28);
+            }
+        });
+    } else {
+        // Self-signed mode
+        addStep({ title:'Server: Generate Self-Signed Certificate', stepN: ++n,
+            desc:'The server generates a Private Key and creates a self-signed certificate — signing it with its own key rather than a CA. No third party is involved.',
+            action() { hlNode('node-server'); showRow('inv-s-key'); showRow('inv-s-crt'); }
+        });
+        if (isMTLS) {
+            addStep({ title:'Device: Generate Self-Signed Certificate', stepN: ++n,
+                desc:'The device also generates its own self-signed certificate. Both endpoints now have self-signed certificates, but neither trusts the other yet.',
+                action() { hlNode('node-client'); showRow('inv-c-key'); showRow('inv-c-crt'); }
+            });
+        }
+        addStep({ title:'Provisioning: Manual Certificate Exchange', stepN: ++n,
+            desc: isMTLS
+                ? 'An admin manually imports the Server Certificate into the device\'s trust list, and the Device Certificate into the server\'s trust list. This manual exchange establishes mutual trust.'
+                : 'An admin manually imports the Server Certificate into the device\'s trust list. The device will accept this specific certificate when it connects.',
+            action() {
+                drawLine('node-server','node-client','var(--ca)',0);
+                animPkt('node-server','node-client','⬇️ Import Server Cert → Device','var(--ca)',0,-28);
+                if (isMTLS) {
+                    setTimeout(() => {
+                        drawLine('node-client','node-server','var(--ca)',0);
+                        animPkt('node-client','node-server','⬇️ Import Device Cert → Server','var(--ca)',0,-28);
+                    }, 1200);
+                }
+            }
+        });
+    }
+
+    // Client Hello
+    addStep({ title:'Device → Server: Client Hello', stepN: ++n,
+        desc:'The device initiates the TLS handshake by sending a Client Hello. This includes supported TLS versions, cipher suites, and a random number used later in key derivation.',
+        action() {
+            hlNode('node-client');
+            drawLine('node-client','node-server','var(--primary)',0);
+            animPkt('node-client','node-server','👋 Client Hello','var(--primary)',0,-28);
+        }
+    });
+
+    // Server sends cert
+    addStep({ title:'Server → Device: Server Certificate', stepN: ++n,
+        desc:'The server responds with its Server Certificate. The device must now verify this certificate to confirm it is talking to the correct, trusted server.',
+        action() {
+            hlNode('node-server');
+            drawLine('node-server','node-client','var(--server)',0);
+            animPkt('node-server','node-client','📜 Server Certificate','var(--server)',0,-28);
+        },
+        quizAfter: {
+            question: 'The device just received the server\'s certificate. How does it verify the server\'s identity?',
+            opts: [
+                'By checking the server\'s IP address',
+                isCA ? 'Using its pre-installed Root CA to verify the certificate chain'
+                     : 'Comparing against the manually imported Server Certificate copy',
+                'Sending a challenge-response request back to the server',
+                'The network router handles certificate verification'
+            ],
+            ans: 1,
+            exp: isCA
+                ? 'The device checks whether the server certificate was signed by the trusted Root CA. If the chain is valid and the domain matches, the server identity is confirmed — automatically, without manual setup.'
+                : 'Without a CA, the device simply compares the received certificate byte-for-byte against the one manually imported during provisioning. If they match, the server is trusted.',
+            answered: false
+        }
+    });
+
+    // Verify server
+    addStep({ title:'Device: Verify Server Certificate ✓', stepN: ++n,
+        desc: isCA
+            ? 'The device uses its pre-installed Root CA certificate to verify the server certificate\'s signature chain. Verification passes — the server is authenticated.'
+            : 'The device compares the received Server Certificate against its manually imported trusted copy. They match — the server is authenticated.',
+        action() {
+            hlNode('node-client');
+            pulseRow(isCA ? 'inv-c-ca' : 'inv-c-trust-scrt');
+            pulseRow('inv-c-scrt');
+        }
+    });
+
+    if (isMTLS) {
+        addStep({ title:'Server → Device: Certificate Request', stepN: ++n,
+            desc:'mTLS-specific: the server sends a Certificate Request to the device, asking it to prove its own identity. In standard TLS this step does not occur.',
+            action() {
+                hlNode('node-server');
+                drawLine('node-server','node-client','var(--ca)',0);
+                animPkt('node-server','node-client','❓ Certificate Request (mTLS)','var(--ca)',0,-28);
+            }
+        });
+
+        addStep({ title:'Device → Server: Device Certificate', stepN: ++n,
+            desc:'The device responds by sending its Device Certificate to the server. The server must now verify this certificate to authorize the device.',
+            action() {
+                hlNode('node-client');
+                drawLine('node-client','node-server','var(--client)',0);
+                animPkt('node-client','node-server','📜 Device Certificate','var(--client)',0,-28);
+            },
+            quizAfter: {
+                question: 'The server just received the device\'s certificate. What does it check to decide if the device is authorized?',
+                opts: [
+                    'Whether the device has enough available memory',
+                    'Whether the device\'s IP address is on an allowlist',
+                    isCA ? 'Whether the certificate was signed by the trusted Root CA'
+                         : 'Whether the certificate matches one in its manual trust list',
+                    'Whether the device\'s firmware version is up to date'
+                ],
+                ans: 2,
+                exp: isCA
+                    ? 'The server verifies the device certificate against its Root CA. If the chain of trust is valid, the device is confirmed as legitimate and the connection is allowed to proceed.'
+                    : 'Without a CA, the server checks the received Device Cert against the certificate manually imported into its trust list during provisioning. A match means the device is authorized.',
+                answered: false
+            }
+        });
+
+        addStep({ title:'Server: Verify Device Certificate ✓', stepN: ++n,
+            desc: isCA
+                ? 'The server uses its Root CA certificate to validate the device certificate. Verification passes — both parties are now mutually authenticated.'
+                : 'The server checks the Device Certificate against its trust list. It matches — both parties are mutually authenticated.',
+            action() {
+                hlNode('node-server');
+                pulseRow(isCA ? 'inv-s-ca' : 'inv-s-trust-ccrt');
+                pulseRow('inv-s-ccrt');
+            }
+        });
+    }
+
+    // Key exchange
+    addStep({ title:'Key Exchange: Derive Session Key', stepN: ++n,
+        desc:'Both parties use asymmetric encryption to securely exchange key material. Each side independently computes the same Session Key. No secret is ever transmitted directly.',
+        action() {
+            hlNode('node-client'); hlNode('node-server');
+            drawLine('node-client','node-server','var(--success)',0);
+            animPkt('node-client','node-server','🔐 Key Exchange','var(--success)',0,-28);
+        },
+        quizAfter: {
+            question: 'Handshake complete — both sides now share a Session Key. What is this key used for?',
+            opts: [
+                'It is stored permanently on the device for future reconnections',
+                'It is used to sign new certificate requests to the CA',
+                'It encrypts all data exchanged during this connection session',
+                'It replaces the server\'s public key in the next handshake'
+            ],
+            ans: 2,
+            exp: 'The Session Key is a temporary symmetric key. It encrypts all application data for the current session only — much faster than asymmetric encryption. When the connection ends, the key is discarded. Every session generates a new one.',
+            answered: false
+        }
+    });
+
+    // Handshake done
+    addStep({ title:'Handshake Complete ✅', stepN: ++n,
+        desc:'Both parties have authenticated each other (one-way or mutual) and derived a shared Session Key. The TLS handshake is complete.',
+        action() { hlNode('node-client'); hlNode('node-server'); }
+    });
+
+    // Data flow
+    addStep({ title:'Encrypted Data Transmission', stepN: ++n,
+        desc:'All data — sensor readings, commands, status updates — is now encrypted with the Session Key. Even if packets are intercepted, the contents cannot be read without the key.',
+        action() {
+            drawLine('node-client','node-server','var(--success)',0);
+            animPkt('node-client','node-server','🔒 [Encrypted Payload] 🔒','var(--success)',0,-28);
+            setTimeout(() => {
+                drawLine('node-server','node-client','var(--success)',0);
+                animPkt('node-server','node-client','🔒 [Encrypted ACK] 🔒','var(--success)',0,-28);
+            }, 1600);
+        }
+    });
+}
+
+// ── Inventory update ──
+function updateInventory() {
+    document.querySelectorAll('.inv-row').forEach(e => e.style.display='none');
+    const isCA = config.trust==='ca', isMTLS = config.protocol==='mutual';
+    const idx = name => steps.findIndex(s => s.title && s.title.includes(name));
+
+    showRow('inv-s-key');
+    if (currentStep >= idx('Server: Generate') || currentStep >= idx('Server Certificate (CA')) {
+        showRow('inv-s-crt');
+    }
+    if (isCA && currentStep >= 0) showRow('inv-s-ca');
+
+    if (isCA) {
+        const provIdx = steps.findIndex(s => s.title && s.title.includes('Provisioning'));
+        if (currentStep >= provIdx && provIdx !== -1) {
+            showRow('inv-c-ca');
+            if (isMTLS) { showRow('inv-c-key'); showRow('inv-c-crt'); }
+        }
+    } else {
+        if (currentStep >= 0) { showRow('inv-s-crt'); }
+        if (isMTLS && currentStep >= 1) { showRow('inv-c-key'); showRow('inv-c-crt'); }
+        const provIdx = steps.findIndex(s => s.title && s.title.includes('Provisioning'));
+        if (currentStep >= provIdx && provIdx !== -1) {
+            showRow('inv-c-trust-scrt');
+            if (isMTLS) showRow('inv-s-trust-ccrt');
+        }
+    }
+
+    const scIdx = steps.findIndex(s => s.title && s.title.includes('Server → Device: Server Certificate'));
+    if (currentStep > scIdx && scIdx !== -1) showRow('inv-c-scrt');
+
+    const ccIdx = steps.findIndex(s => s.title && s.title.includes('Device → Server: Device Certificate'));
+    if (currentStep > ccIdx && ccIdx !== -1) showRow('inv-s-ccrt');
+
+    const doneIdx = steps.findIndex(s => s.title && s.title.includes('Handshake Complete'));
+    if (currentStep >= doneIdx && doneIdx !== -1) { showRow('inv-c-sess'); showRow('inv-s-sess'); }
+}
+
+// ── Modal ──
+let pendingModalStep = null;
+
+function showQuizModal(quiz) {
+    pendingModalStep = quiz;
+    document.getElementById('modal-question').textContent = quiz.question;
+    document.getElementById('modal-exp').className = 'modal-exp';
+    document.getElementById('modal-exp').textContent = quiz.exp;
+    document.getElementById('modal-continue').disabled = true;
+
+    const opts = document.getElementById('modal-options');
+    opts.innerHTML = quiz.opts.map((o,oi) =>
+        `<button class="modal-opt" id="mopt-${oi}" onclick="answerModal(${oi})">` +
+        `<span style="color:var(--text-muted);margin-right:6px">${['A','B','C','D'][oi]}.</span>${o}</button>`
+    ).join('');
+
+    // If already answered, restore state
+    if (quiz.answered) {
+        restoreModal(quiz);
+        document.getElementById('modal-continue').disabled = false;
+    }
+
+    document.getElementById('quiz-modal').classList.remove('hidden');
+}
+
+function answerModal(chosen) {
+    if (pendingModalStep.answered) return;
+    pendingModalStep.answered = true;
+    pendingModalStep.chosenIdx = chosen;
+
+    document.querySelectorAll('.modal-opt').forEach(b => b.disabled = true);
+    document.getElementById(`mopt-${chosen}`).classList.add(chosen === pendingModalStep.ans ? 'correct' : 'wrong');
+    if (chosen !== pendingModalStep.ans) document.getElementById(`mopt-${pendingModalStep.ans}`).classList.add('correct');
+    document.getElementById('modal-exp').classList.add('show');
+    document.getElementById('modal-continue').disabled = false;
+}
+
+function restoreModal(quiz) {
+    document.querySelectorAll('.modal-opt').forEach(b => b.disabled = true);
+    document.getElementById(`mopt-${quiz.chosenIdx}`).classList.add(quiz.chosenIdx === quiz.ans ? 'correct' : 'wrong');
+    if (quiz.chosenIdx !== quiz.ans) document.getElementById(`mopt-${quiz.ans}`).classList.add('correct');
+    document.getElementById('modal-exp').classList.add('show');
+}
+
+function closeModal() {
+    document.getElementById('quiz-modal').classList.add('hidden');
+    pendingModalStep = null;
+    // Advance to next step
+    currentStep = Math.min(steps.length - 1, currentStep + 1);
+    updateUI();
+}
+
+// ── Sim flow ──
+function startSim() {
+    buildSteps();
+    currentStep = 0;
+    document.getElementById('btn-start').style.display   = 'none';
+    document.getElementById('btn-prev').style.display    = 'inline-block';
+    document.getElementById('btn-next').style.display    = 'inline-block';
+    document.getElementById('btn-restart').style.display = 'inline-block';
+    updateUI();
+}
+
+function changeStep(dir) {
+    if (dir > 0) {
+        const s = steps[currentStep];
+        if (s.quizAfter && !s.quizAfter.answered) {
+            showQuizModal(s.quizAfter);
+            return;
+        }
+        if (s.quizAfter && s.quizAfter.answered && !document.getElementById('quiz-modal').classList.contains('hidden')) {
+            return; // modal still open
+        }
+    }
+    currentStep = Math.max(0, Math.min(steps.length-1, currentStep + dir));
+    updateUI();
+}
+
+function updateUI() {
+    cleanup();
+    const s   = steps[currentStep];
+    const pct = Math.round((currentStep+1) / steps.length * 100);
+
+    document.getElementById('progress-fill').style.width = pct+'%';
+    document.getElementById('progress-label').textContent = `${currentStep+1} / ${steps.length}`;
+    document.getElementById('btn-prev').disabled = (currentStep === 0);
+
+    const isLast = currentStep === steps.length-1;
+    document.getElementById('btn-next').style.display = isLast ? 'none' : 'inline-block';
+    if (isLast) {
+        document.getElementById('btn-start').style.display = 'inline-block';
+        document.getElementById('btn-start').textContent   = '▶ Watch Again';
+        document.getElementById('btn-start').onclick       = () => { resetSim(); startSim(); };
+    }
+
+    document.getElementById('bubble-step').textContent  = s.stepN ? `Step ${s.stepN} of ${steps.filter(x=>x.stepN).length}` : '';
+    document.getElementById('bubble-title').textContent = s.title;
+    document.getElementById('bubble-desc').innerHTML    = s.desc;
+
+    updateInventory();
+    s.action();
+}
+
+resetSim();
+
+// ══════════════════════════════════════════
+//  KNOWLEDGE CHECK (standalone)
+// ══════════════════════════════════════════
+const quizData = [
+    { q:'In standard One-way TLS, which party must present a certificate?',
+      opts:['The client (device)','The server','Both parties','Neither party'], ans:1,
+      exp:'One-way TLS only authenticates the server. Only the server presents a certificate. The client does not need one.' },
+    { q:'What is the primary role of a Root CA in PKI?',
+      opts:['Directly encrypt all transmitted data','Sign and vouch for the authenticity of certificates','Generate the Session Key for each connection','Assign IP addresses to devices'], ans:1,
+      exp:'A CA signs certificates with its private key. Anyone trusting the same Root CA automatically trusts all certificates it issued, eliminating manual per-device setup.' },
+    { q:'What is the main drawback of self-signed certificates?',
+      opts:['Weaker encryption','Trust must be established manually for every pair of endpoints','They cannot be used in mTLS','Shorter validity periods'], ans:1,
+      exp:'Without CA backing, every communicating pair must manually exchange and import certificates. With many devices this becomes operationally unmanageable.' },
+    { q:'What fundamentally distinguishes mTLS from One-way TLS?',
+      opts:['Stronger encryption algorithm','Faster connection setup','The server also verifies the client device\'s identity','No Server Certificate is required'], ans:2,
+      exp:'mTLS adds a step where the server requests and verifies the client certificate, ensuring only authorized devices can connect — not just any client.' },
+    { q:'What is a Session Key used for?',
+      opts:['Stored permanently for reuse','Submitted to the CA with certificate requests','Encrypting all data during the current connection','Replacing the server\'s public key'], ans:2,
+      exp:'The Session Key is a temporary symmetric key for encrypting data during one session only. It is discarded when the connection ends; each session generates a new unique key.' },
+    { q:'In mTLS with Root CA, which files must be pre-installed on the device?',
+      opts:['Root CA certificate only','Root CA + Server Certificate','Root CA + Device Private Key + Device Certificate','Device Private Key only'], ans:2,
+      exp:'Three files are needed: ① Root CA cert (verify the server), ② Device Private Key (prove device identity), ③ Device Certificate (present to the server for authentication).' },
+    { q:'How is the Session Key established during a TLS handshake?',
+      opts:['Generated by the server and sent to the client','Pre-assigned by the CA','Both sides exchange key material asymmetrically and independently compute the same key','Taken from the server\'s public key'], ans:2,
+      exp:'Using key exchange algorithms (e.g., Diffie-Hellman), both parties derive the same Session Key without ever transmitting the secret itself over the network.' },
+    { q:'In self-signed mTLS, what must be done each time a new device is added?',
+      opts:['Nothing — the CA handles it','Just restart the server','Import the new device cert into the server trust list, and the server cert into the new device','Request updated certs from the CA for all devices'], ans:2,
+      exp:'Without a CA, every new device requires manual work: add its cert to the server trust list and install the server cert on the device. This scales very poorly.' }
+];
+
+let quizAnswers = [];
+
+function initQuiz() {
+    quizAnswers = new Array(quizData.length).fill(null);
+    document.getElementById('score-panel').classList.remove('show');
+    document.getElementById('quiz-body').innerHTML = quizData.map((q,qi) => `
+        <div class="quiz-question">
+            <div class="q-num">Question ${qi+1} / ${quizData.length}</div>
+            <div class="q-text">${q.q}</div>
+            <div class="q-options">${q.opts.map((o,oi)=>
+                `<button class="q-option" id="qopt-${qi}-${oi}" onclick="selectAnswer(${qi},${oi})">
+                    <span style="color:var(--text-muted);margin-right:8px">${['A','B','C','D'][oi]}.</span>${o}
+                </button>`).join('')}
+            </div>
+            <div class="q-explanation" id="qexp-${qi}">${q.exp}</div>
+        </div>`).join('');
+}
+
+function selectAnswer(qi, oi) {
+    if (quizAnswers[qi] !== null) return;
+    quizAnswers[qi] = oi;
+    const q = quizData[qi];
+    document.querySelectorAll(`[id^="qopt-${qi}-"]`).forEach(b => b.disabled=true);
+    document.getElementById(`qopt-${qi}-${oi}`).classList.add(oi===q.ans?'correct':'wrong');
+    if (oi!==q.ans) document.getElementById(`qopt-${qi}-${q.ans}`).classList.add('correct');
+    document.getElementById(`qexp-${qi}`).classList.add('show');
+    if (quizAnswers.every(a=>a!==null)) showScore();
+}
+
+function showScore() {
+    const correct = quizAnswers.filter((a,i)=>a===quizData[i].ans).length;
+    const pct = Math.round(correct/quizData.length*100);
+    document.getElementById('score-display').textContent = `${correct} / ${quizData.length}`;
+    const msgs = [[100,'🏆 Perfect! Deep mastery of TLS & mTLS.'],[75,'🎉 Excellent! Almost perfect.'],[50,'👍 Good effort — review the missed questions.'],[0,'📚 Keep practicing — try the Simulation and Concepts tabs!']];
+    document.getElementById('score-msg').textContent = msgs.find(([t])=>pct>=t)[1];
+    const sp = document.getElementById('score-panel');
+    sp.classList.add('show');
+    sp.scrollIntoView({behavior:'smooth',block:'center'});
+}
+
+initQuiz();
+</script>
+</body>
+</html>
